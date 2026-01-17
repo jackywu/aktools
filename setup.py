@@ -4,6 +4,7 @@
 Date: 2024/11/20 15:20
 Desc: AKTools 的 PYPI 基本信息文件
 """
+
 import re
 import ast
 
@@ -45,6 +46,7 @@ setuptools.setup(
         "python-multipart>=0.0.9",
         "jinja2>=3.1.2",
         "typer[standard]>=0.6.1",
+        "cachetools>=6.0.0",
     ],
     package_data={"": ["*.py", "*.json", "*.pk", "*.woff", "*.html", "*.ico"]},
     keywords=[
