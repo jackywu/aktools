@@ -4,6 +4,7 @@
 Date: 2022/9/28 15:05
 Desc: 主程序入口文件
 """
+
 import os
 import sys
 
@@ -36,7 +37,10 @@ app = FastAPI(
 
 
 @app.get(
-    path="/favicon.ico", include_in_schema=False, description="获取 ico 的路径", summary="ico 的路径"
+    path="/favicon.ico",
+    include_in_schema=False,
+    description="获取 ico 的路径",
+    summary="ico 的路径",
 )
 async def favicon() -> FileResponse:
     """
@@ -93,4 +97,4 @@ app.include_router(app_core, prefix="/api", tags=["数据接口"])
 app.include_router(app_user_login, prefix="/auth", tags=["登录接口"])
 
 if __name__ == "__main__":
-    uvicorn.run(app="main:app", host="127.0.0.1", port=8080)
+    uvicorn.run(app="main:app", host="127.0.0.1", port=8080, timeout_keep_alive=300)
