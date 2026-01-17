@@ -4,11 +4,14 @@
 Date: 2024/1/12 22:05
 Desc: HTTP 模式主文件
 """
+
 import json
 import logging
 import os
 import urllib.parse
 from logging.handlers import TimedRotatingFileHandler
+from cachetools import TTLCache
+from cachetools.keys import hashkey
 
 import akshare as ak
 from fastapi import APIRouter
@@ -23,27 +26,65 @@ from aktools.login.user_login import User, get_current_active_user
 app_core = APIRouter()
 
 # 创建一个日志记录器
-logger = logging.getLogger(name='AKToolsLog')
+logger = logging.getLogger(name="AKToolsLog")
 logger.setLevel(logging.INFO)
 
 # 创建一个TimedRotatingFileHandler来进行日志轮转
 handler = TimedRotatingFileHandler(
-    filename='/tmp/aktools_log.log' if os.getenv('VERCEL') == '1' else 'aktools_log.log',
-        when='midnight', interval=1, backupCount=7, encoding='utf-8'
+    filename="/tmp/aktools_log.log"
+    if os.getenv("VERCEL") == "1"
+    else "aktools_log.log",
+    when="midnight",
+    interval=1,
+    backupCount=7,
+    encoding="utf-8",
 )
-formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 handler.setFormatter(formatter)
 logger.addHandler(handler)
 
 # 使用日志记录器记录信息
-logger.info('这是一个信息级别的日志消息')
+logger.info("这是一个信息级别的日志消息")
+
+enable_cache = os.getenv("AKTOOLS_CACHE_ENABLE", "true").lower() == "true"
+cache_maxsize = int(os.getenv("AKTOOLS_CACHE_MAXSIZE", "128"))
+cache_ttl = int(os.getenv("AKTOOLS_CACHE_TTL", "3600"))
+
+api_cache = TTLCache(maxsize=cache_maxsize, ttl=cache_ttl)
 
 
-@app_core.get("/private/{item_id}", description="私人接口", summary="该接口主要提供私密访问来获取数据")
+def invoke_ak_api(item_id: str, eval_str: str = None):
+    def _fetch():
+        if eval_str is None:
+            cmd = "ak." + item_id + "()"
+        else:
+            cmd = "ak." + item_id + f"({eval_str})"
+        received_df = eval(cmd)
+        if received_df is None:
+            return None
+        return received_df.to_json(orient="records", date_format="iso")
+
+    if not enable_cache:
+        return _fetch(), "DISABLED"
+
+    key = hashkey(item_id, eval_str)
+    try:
+        return api_cache[key], "HIT"
+    except KeyError:
+        res = _fetch()
+        api_cache[key] = res
+        return res, "MISS"
+
+
+@app_core.get(
+    "/private/{item_id}",
+    description="私人接口",
+    summary="该接口主要提供私密访问来获取数据",
+)
 def root(
-        request: Request,
-        item_id: str,
-        current_user: User = Depends(get_current_active_user),
+    request: Request,
+    item_id: str,
+    current_user: User = Depends(get_current_active_user),
 ):
     """
     接收请求参数及接口名称并返回 JSON 数据
@@ -70,13 +111,15 @@ def root(
     eval_str = decode_params.replace("&", '", ').replace("=", '="') + '"'
     if not bool(request.query_params):
         try:
-            received_df = eval("ak." + item_id + "()")
-            if received_df is None:
+            temp_df, cache_status = invoke_ak_api(item_id, None)
+            if temp_df is None:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"},
+                    content={
+                        "error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"
+                    },
+                    headers={"X-Cache-Status": cache_status},
                 )
-            temp_df = received_df.to_json(orient="records", date_format="iso")
         except KeyError as e:
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -84,16 +127,22 @@ def root(
                     "error": f"请输入正确的参数错误 {e}，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz"
                 },
             )
-        return JSONResponse(status_code=status.HTTP_200_OK, content=json.loads(temp_df))
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=json.loads(temp_df),
+            headers={"X-Cache-Status": cache_status},
+        )
     else:
         try:
-            received_df = eval("ak." + item_id + f"({eval_str})")
-            if received_df is None:
+            temp_df, cache_status = invoke_ak_api(item_id, eval_str)
+            if temp_df is None:
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"},
+                    content={
+                        "error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"
+                    },
+                    headers={"X-Cache-Status": cache_status},
                 )
-            temp_df = received_df.to_json(orient="records", date_format="iso")
         except KeyError as e:
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -101,10 +150,18 @@ def root(
                     "error": f"请输入正确的参数错误 {e}，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz"
                 },
             )
-        return JSONResponse(status_code=status.HTTP_200_OK, content=json.loads(temp_df))
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=json.loads(temp_df),
+            headers={"X-Cache-Status": cache_status},
+        )
 
 
-@app_core.get(path="/public/{item_id}", description="公开接口", summary="该接口主要提供公开访问来获取数据")
+@app_core.get(
+    path="/public/{item_id}",
+    description="公开接口",
+    summary="该接口主要提供公开访问来获取数据",
+)
 def root(request: Request, item_id: str):
     """
     接收请求参数及接口名称并返回 JSON 数据
@@ -120,7 +177,9 @@ def root(request: Request, item_id: str):
     decode_params = urllib.parse.unquote(str(request.query_params))
     # print(decode_params)
     if item_id not in interface_list:
-        logger.info("未找到该接口，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz")
+        logger.info(
+            "未找到该接口，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz"
+        )
         return JSONResponse(
             status_code=status.HTTP_404_NOT_FOUND,
             content={
@@ -129,10 +188,10 @@ def root(request: Request, item_id: str):
         )
     if "cookie" in decode_params:
         eval_str = (
-                decode_params.split(sep="=", maxsplit=1)[0]
-                + "='"
-                + decode_params.split(sep="=", maxsplit=1)[1]
-                + "'"
+            decode_params.split(sep="=", maxsplit=1)[0]
+            + "='"
+            + decode_params.split(sep="=", maxsplit=1)[1]
+            + "'"
         )
         eval_str = eval_str.replace("+", " ")
     else:
@@ -140,17 +199,22 @@ def root(request: Request, item_id: str):
         eval_str = eval_str.replace("+", " ")  # 处理传递的参数中带空格的情况
     if not bool(request.query_params):
         try:
-            received_df = eval("ak." + item_id + "()")
-            if received_df is None:
-                logger.info("该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz")
+            temp_df, cache_status = invoke_ak_api(item_id, None)
+            if temp_df is None:
+                logger.info(
+                    "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"
+                )
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"},
+                    content={
+                        "error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"
+                    },
+                    headers={"X-Cache-Status": cache_status},
                 )
-            temp_df = received_df.to_json(orient="records", date_format="iso")
         except KeyError as e:
             logger.info(
-                f"请输入正确的参数错误 {e}，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz")
+                f"请输入正确的参数错误 {e}，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz"
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={
@@ -158,20 +222,29 @@ def root(request: Request, item_id: str):
                 },
             )
         logger.info(f"获取到 {item_id} 的数据")
-        return JSONResponse(status_code=status.HTTP_200_OK, content=json.loads(temp_df))
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=json.loads(temp_df),
+            headers={"X-Cache-Status": cache_status},
+        )
     else:
         try:
-            received_df = eval("ak." + item_id + f"({eval_str})")
-            if received_df is None:
-                logger.info("该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz")
+            temp_df, cache_status = invoke_ak_api(item_id, eval_str)
+            if temp_df is None:
+                logger.info(
+                    "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"
+                )
                 return JSONResponse(
                     status_code=status.HTTP_404_NOT_FOUND,
-                    content={"error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"},
+                    content={
+                        "error": "该接口返回数据为空，请确认参数是否正确：https://akshare.akfamily.xyz"
+                    },
+                    headers={"X-Cache-Status": cache_status},
                 )
-            temp_df = received_df.to_json(orient="records", date_format="iso")
         except KeyError as e:
             logger.info(
-                f"请输入正确的参数错误 {e}，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz")
+                f"请输入正确的参数错误 {e}，请升级 AKShare 到最新版本并在文档中确认该接口的使用方式：https://akshare.akfamily.xyz"
+            )
             return JSONResponse(
                 status_code=status.HTTP_404_NOT_FOUND,
                 content={
@@ -179,7 +252,11 @@ def root(request: Request, item_id: str):
                 },
             )
         logger.info(f"获取到 {item_id} 的数据")
-        return JSONResponse(status_code=status.HTTP_200_OK, content=json.loads(temp_df))
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content=json.loads(temp_df),
+            headers={"X-Cache-Status": cache_status},
+        )
 
 
 def generate_html_response():
