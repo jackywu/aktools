@@ -18,6 +18,7 @@ colors
 # IDE
 .idea/
 .env
+.venv
 
 # jupyter
 .ipynb_checkpoints
