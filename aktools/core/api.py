@@ -45,11 +45,14 @@ logger.addHandler(handler)
 # 使用日志记录器记录信息
 logger.info("这是一个信息级别的日志消息")
 
-api_cache = TTLCache(maxsize=128, ttl=3600)
+enable_cache = os.getenv("AKTOOLS_CACHE_ENABLE", "true").lower() == "true"
+cache_maxsize = int(os.getenv("AKTOOLS_CACHE_MAXSIZE", "128"))
+cache_ttl = int(os.getenv("AKTOOLS_CACHE_TTL", "3600"))
+
+api_cache = TTLCache(maxsize=cache_maxsize, ttl=cache_ttl)
 
 
-@cached(cache=api_cache)
-def invoke_ak_api(item_id: str, eval_str: str = None):
+def invoke_ak_api_impl(item_id: str, eval_str: str = None):
     if eval_str is None:
         cmd = "ak." + item_id + "()"
     else:
@@ -58,6 +61,12 @@ def invoke_ak_api(item_id: str, eval_str: str = None):
     if received_df is None:
         return None
     return received_df.to_json(orient="records", date_format="iso")
+
+
+if enable_cache:
+    invoke_ak_api = cached(cache=api_cache)(invoke_ak_api_impl)
+else:
+    invoke_ak_api = invoke_ak_api_impl
 
 
 @app_core.get(
