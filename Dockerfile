@@ -12,7 +12,7 @@ COPY requirements.txt .
 
 # 安装依赖 (包含 gunicorn)
 # 注意：这里同时安装了 gunicorn，因为它不在 requirements.txt 中
-RUN pip install --no-cache-dir -r requirements.txt gunicorn -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com
+RUN pip install --no-cache-dir -U -r requirements.txt gunicorn -i http://mirrors.aliyun.com/pypi/simple/ --trusted-host=mirrors.aliyun.com
 
 # 2. 拷贝所有源码
 COPY . .
