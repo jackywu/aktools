@@ -26,4 +26,5 @@ colors
 #docs/source/_templates/
 .DS_Store
 .pytest_cache
+/aktools_log.log
 ./log/*
